@@ -43,7 +43,25 @@ echo "Found $(/usr/bin/vlc --version 2>/dev/null | head -1)"
 
 # ---- files ----
 systemctl --user stop loopplayer.service 2>/dev/null
-mkdir -p "$DEST/media" "$DEST/state" "$UNIT_DIR" "$(dirname "$AUTOSTART")" "$APPS"
+# Everything goes into this user's own folders. If any of them belong to
+# root (usually from something once run with sudo), stop here with the fix,
+# rather than installing half and starting nothing.
+bad=""
+for d in "$DEST" "$DEST/media" "$DEST/state" "$UNIT_DIR" "$(dirname "$AUTOSTART")" "$APPS"; do
+    mkdir -p "$d" 2>/dev/null
+    { [ -d "$d" ] && [ -w "$d" ]; } || bad="$bad $d"
+done
+for f in "$DEST"/* "$UNIT_DIR/loopplayer.service" "$AUTOSTART"; do
+    [ -e "$f" ] && [ ! -w "$f" ] && bad="$bad $f"
+done
+if [ -n "$bad" ]; then
+    echo
+    echo "!! These belong to another user (probably root), so the install can't write them:"
+    for d in $bad; do echo "     $d"; done
+    echo "   Give them back to $(id -un), then run this again:"
+    echo "     sudo chown -R \"\$USER\": ~/.config ~/.local ~/LoopPlayer"
+    exit 1
+fi
 if [ "$SRC" != "$DEST" ]; then
     cp -f "$SRC/loopplayer.sh" "$SRC/install-debian.sh" "$SRC/uninstall-debian.sh" "$SRC/README-debian.txt" "$DEST/"
 fi
@@ -243,9 +261,17 @@ esac
 # ---- go ----
 systemctl --user daemon-reload
 /bin/bash "$DEST/session-start.sh"
+sleep 2
+if ! systemctl --user is-active --quiet loopplayer.service; then
+    echo
+    echo "!! LoopPlayer was set up but did not start. Details:"
+    systemctl --user status loopplayer.service --no-pager 2>&1 | head -15
+    echo "   and the end of ~/LoopPlayer/state/loopplayer.log"
+    exit 1
+fi
 
 echo
-echo "Installed. Playing videos from:  $("$LP" status | sed -n 's/^Folder: *//p')"
+echo "Installed and running. Playing videos from:  $("$LP" status | sed -n 's/^Folder: *//p')"
 echo "It starts now and at every login. Controls:"
 echo "    $LP stop | start | restart | reset | status"
 echo "(also in the applications menu as \"LoopPlayer: ...\")"

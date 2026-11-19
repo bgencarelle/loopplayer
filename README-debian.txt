@@ -41,7 +41,10 @@ Exactly as on the Mac; see README.txt. Settings are in
                            stay centred; replaces CROP)
 
 HOW IT RUNS
-- VLC dropping out of fullscreen is put back within ~10 seconds. (Raising
+- VLC dropping out of fullscreen is put back within ~10 seconds.
+- A screen unplugged and plugged back in, or a TV switched off and on:
+  about 10-20 seconds after it's back, VLC is re-fitted to it (out of
+  fullscreen and back in). The log says "screens changed". (Raising
   it over other windows needs the wmctrl package, if you want that.)
 - A systemd user service (loopplayer.service) runs the watcher and restarts
   it if it dies; the watcher restarts VLC if VLC crashes, freezes, is

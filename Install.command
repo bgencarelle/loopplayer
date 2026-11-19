@@ -40,8 +40,11 @@ if [ ! -f "$DEST/settings.txt" ]; then
     echo
     echo "Which folder should the playlist come from?"
     echo "(Cancel the dialog to use $DEST/media)"
-    DIR=$(osascript -e 'POSIX path of (choose folder with prompt "Choose the folder with the videos to loop:")' 2>/dev/null)
-    DIR="${DIR%/}"; [ -z "$DIR" ] && DIR="$DEST/media"
+    DIR=$("$LP" pick-folder)
+    if [ -z "$DIR" ]; then
+        DIR="$DEST/media"
+        echo "No folder chosen: using $DIR (change it later with Choose Folder)."
+    fi
     "$LP" set VIDEO_FOLDER "$DIR" >/dev/null
     echo "Video folder: $DIR"
 
@@ -168,6 +171,15 @@ launchctl load -w "$PLIST"
 echo
 echo "Installed in $DEST  (shortcut: LoopPlayer in Applications)."
 echo "Playing videos from:  $("$LP" status | sed -n 's/^Folder: *//p')"
+NV=$("$LP" count-videos 2>/dev/null)
+if [ "${NV:-0}" = 0 ]; then
+    echo
+    echo "!! There are no .mp4 or .mov videos in that folder yet, so nothing will"
+    echo "   play until there are. Add some, or double-click \"Choose Folder\" in"
+    echo "   $DEST to pick the right folder."
+else
+    echo "($NV videos found)"
+fi
 echo "It starts now and at every login."
 echo "Still to do by hand: turn on automatic login for this user"
 echo "(System Preferences > Users & Groups > Login Options)."
