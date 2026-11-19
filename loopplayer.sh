@@ -196,13 +196,18 @@ list_videos() {
 file_size() { ls -ln "$1" 2>/dev/null | awk '{print $5}'; }
 
 sub_for() {   # sub_for "dir/Video.mp4" -> full path of its .srt, if any
-    [ "$SUBTITLES" = 1 ] || return 1    # (same name; upper/lower case ignored)
-    local rel="${1%.*}" dir f want found=1
+    [ "$SUBTITLES" = 1 ] || return 1
+    # "Video.srt" (same name, upper/lower case ignored), looked for next to
+    # the video first, then in a "sub" or "subs" folder beside it (any case)
+    local rel="${1%.*}" dir d f want found=1
     dir="$MEDIA_DIR/$rel"; dir="${dir%/*}"; want="${rel##*/}.srt"
     shopt -s nocasematch
-    for f in "$dir"/*.[sS][rR][tT]; do
-        [ -f "$f" ] || continue
-        if [[ "${f##*/}" == "$want" ]]; then printf '%s' "$f"; found=0; break; fi
+    for d in "$dir" "$dir"/[sS][uU][bB] "$dir"/[sS][uU][bB][sS]; do
+        [ -d "$d" ] || continue
+        for f in "$d"/*.[sS][rR][tT]; do
+            [ -f "$f" ] || continue
+            if [[ "${f##*/}" == "$want" ]]; then printf '%s' "$f"; found=0; break 2; fi
+        done
     done
     shopt -u nocasematch
     return $found
@@ -471,6 +476,60 @@ bring_vlc_front() {
     fi
 }
 
+# Linux: which video outputs (HDMI, DisplayPort, ...) have a screen on them.
+# Read straight from /sys with bash builtins: no programs started.
+DRM_GLOB="${DRM_GLOB:-/sys/class/drm/card*-*/status}"
+DISPLAYS=""
+read_displays() {
+    local f st out=""
+    for f in $DRM_GLOB; do
+        [ -r "$f" ] || continue
+        read -r st <"$f" 2>/dev/null
+        if [ "$st" = connected ]; then
+            f=${f%/status}; f=${f##*/}; out="$out ${f#card*-}"   # e.g. HDMI-A-1
+        fi
+    done
+    DISPLAYS=${out# }
+}
+
+# Make VLC fit the screen again: out of fullscreen and back in.
+refit_fullscreen() {
+    local st
+    st=$(vlc_get status.xml) || return 1
+    if [ "$(xml_val fullscreen "$st")" = true ]; then
+        vlc_get status.xml "command=fullscreen" >/dev/null; sleep 1
+    fi
+    vlc_get status.xml "command=fullscreen" >/dev/null
+    bring_vlc_front
+}
+
+# Ask for the video folder. Prints its path; fails if cancelled.
+# 1) a folder dialog, brought to the front  2) the same through System
+# Events, for systems where (1) can't show a window  3) drag-and-drop into
+# the Terminal window. Errors are shown, not hidden.
+pick_folder() {
+    local prompt="Choose the folder with the videos to loop:" out p
+    if command -v osascript >/dev/null; then
+        out=$(osascript -e 'tell me to activate' -e "POSIX path of (choose folder with prompt \"$prompt\")" 2>&1) &&
+            { printf '%s' "${out%/}"; return 0; }
+        case "$out" in *-128*) return 1 ;; esac          # Cancel clicked
+        out=$(osascript -e 'tell application "System Events"' -e 'activate' \
+                        -e "POSIX path of (choose folder with prompt \"$prompt\")" -e 'end tell' 2>&1) &&
+            { printf '%s' "${out%/}"; return 0; }
+        case "$out" in *-128*) return 1 ;; esac
+        echo "(The folder window couldn't open: ${out:-no reason given})" >&2
+    fi
+    echo "Drag the video folder into this window and press Return" >&2
+    echo "(or type its path; just Return to cancel):" >&2
+    read -r -e p || return 1
+    # undo Terminal's escaping of dragged paths:  My\ Videos  or  'My Videos'
+    p=$(printf '%s' "$p" | sed -e 's/[[:space:]]*$//' -e "s/^'\(.*\)'$/\1/" -e 's/^"\(.*\)"$/\1/' -e 's/\\\(.\)/\1/g')
+    p="${p/#\~/$HOME}"; p="${p%/}"
+    [ -n "$p" ] || return 1
+    [ -d "$p" ] || { echo "Not a folder: $p" >&2; return 1; }
+    printf '%s' "$p"
+}
+
 # ------------------------------ main loop ------------------------------------
 run() {
     log "LoopPlayer starting (pid $$)"
@@ -544,6 +603,8 @@ run() {
 
         local idx=$S_IDX last_idx=$S_IDX last_pos=$S_POS loops=$S_LOOPS
         local st state plid pos tm len move fs fails=0 still=0 paused=0 tick=0 fs_tries=0 behind=0
+        local last_displays refit_at=-1
+        read_displays; last_displays=$DISPLAYS
         while :; do   # inner loop: watch VLC
             sleep "$POLL"
             tick=$((tick+1))
@@ -579,6 +640,20 @@ run() {
                     [ $fs_tries = 3 ] && log "fullscreen not confirmed - not trying again until VLC restarts"
                 elif [ "$fs" = true ]; then
                     fs_tries=0
+                fi
+            fi
+            # Linux: a screen unplugged, replugged or switched back on? Once it
+            # has been back for one check (the desktop needs a moment to set
+            # it up), take VLC out of fullscreen and back in so it fits it.
+            if [ "$FULLSCREEN" = 1 ] && [ "$(uname)" = Linux ]; then
+                read_displays
+                if [ "$DISPLAYS" != "$last_displays" ]; then
+                    log "screens changed (now: ${DISPLAYS:-none})"
+                    last_displays=$DISPLAYS
+                    [ -n "$DISPLAYS" ] && refit_at=$((tick+1))
+                elif [ $refit_at = $tick ]; then
+                    refit_at=-1
+                    refit_fullscreen && log "refitted fullscreen to the screen" && fs_tries=0
                 fi
             fi
             # every minute: VLC hidden behind another app or on another
@@ -658,7 +733,7 @@ status() {
     if [ -f "$PLAYLIST" ]; then
         local n=0 f s
         while IFS= read -r f; do
-            n=$((n+1)); s=""; srt=$(sub_for "$f") && s="   [subs: ${srt##*/}]"
+            n=$((n+1)); s=""; srt=$(sub_for "$f") && s="   [subs: ${srt#$MEDIA_DIR/}]"
             printf '%4d  %s%s\n' "$n" "$f" "$s"
         done <"$PLAYLIST"
     fi
@@ -681,6 +756,8 @@ case "$1" in
         fi
         [ "$1" = stop ] && { sleep 2; pkill -f "http-port=$PORT" 2>/dev/null; }
         echo "LoopPlayer: $1 done." ;;
+    pick-folder) pick_folder ;;
+    count-videos) list_videos | grep -c . ;;
     set)     [ -n "$2" ] || { echo "usage: $0 set KEY VALUE"; exit 1; }
              set_setting "$2" "$3"; echo "$2=$3" ;;
     *)       echo "usage: $0 run|stop|start|reset|restart|status|set KEY VALUE"; exit 1 ;;

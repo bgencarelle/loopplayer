@@ -82,8 +82,11 @@ THE PLAYLIST
   while the player is stopped (a Reset Loop sorts it again).
 
 SUBTITLES
-- Put "Name.srt" next to "Name.mp4", in the same folder (same name;
-  capitals don't matter).
+- Put "Name.srt" next to "Name.mp4", or in a folder called "sub" or "subs"
+  in the same folder as the video (same name; capitals don't matter):
+      Talks/Name.mp4
+      Talks/subs/Name.srt
+  If there's one in both places, the one next to the video is used.
   If there's no .srt, that video plays without subtitles.
 - Turn subtitles off with SUBTITLES=no in settings.txt.
 - If accented letters look wrong, save the .srt as UTF-8.
